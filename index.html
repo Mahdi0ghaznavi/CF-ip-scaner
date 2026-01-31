@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>اسکنر IP کلادفلر</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 اسکنر IP کلادفلر</h1>
+        
+        <div class="config-panel">
+            <div class="input-group">
+                <label for="sni">SNI (Server Name Indication):</label>
+                <input type="text" id="sni" placeholder="example.com" value="speed.cloudflare.com">
+            </div>
+
+            <div class="input-group">
+                <label for="maxPing">حداکثر پینگ (ms):</label>
+                <input type="number" id="maxPing" placeholder="300" value="300" min="0">
+            </div>
+
+            <div class="input-group">
+                <label for="customRange">رنج IP سفارشی (اختیاری):</label>
+                <input type="text" id="customRange" placeholder="162.159.15.0/24">
+                <small>مثال: 162.159.15.0/24 یا چند رنج با خط جدید جدا شوند</small>
+            </div>
+
+            <div class="button-group">
+                <button id="startBtn" onclick="startScan()">شروع اسکن</button>
+                <button id="stopBtn" onclick="stopScan()" disabled>توقف</button>
+                <button id="exportBtn" onclick="exportResults()" disabled>دانلود نتایج (CSV)</button>
+            </div>
+        </div>
+
+        <div class="stats">
+            <div class="stat-item">
+                <span class="stat-label">تعداد تست شده:</span>
+                <span id="testedCount" class="stat-value">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">IP های موفق:</span>
+                <span id="successCount" class="stat-value">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">وضعیت:</span>
+                <span id="status" class="stat-value">آماده</span>
+            </div>
+        </div>
+
+        <div class="progress-container">
+            <div id="progressBar" class="progress-bar"></div>
+        </div>
+
+        <div class="results">
+            <h2>نتایج اسکن:</h2>
+            <div id="resultsContainer">
+                <p class="empty-state">هنوز IP ای پیدا نشده است...</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="scanner.js"></script>
+</body>
+</html>
