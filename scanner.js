@@ -43,40 +43,115 @@ function numberToIp(num) {
     ].join('.');
 }
 
-// Test IP with ping simulation
-async function testIP(ip, sni, maxPing) {
+// Test IP with actual connection test
+async function testIP(ip, port = 443, timeout = 3000) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        const img = new Image();
+        let timer;
+        let completed = false;
+
+        const cleanup = () => {
+            if (completed) return;
+            completed = true;
+            clearTimeout(timer);
+            img.onload = null;
+            img.onerror = null;
+        };
+
+        img.onload = () => {
+            cleanup();
+            const ping = Date.now() - start;
+            resolve(ping);
+        };
+
+        img.onerror = () => {
+            cleanup();
+            const ping = Date.now() - start;
+            // Even on error, if response was fast, IP is reachable
+            if (ping < timeout) {
+                resolve(ping);
+            } else {
+                resolve(null);
+            }
+        };
+
+        timer = setTimeout(() => {
+            cleanup();
+            resolve(null);
+        }, timeout);
+
+        // Try to load a small resource from Cloudflare CDN on this IP
+        // Using cache-busting to avoid cached responses
+        img.src = `https://${ip}/cdn-cgi/trace?t=${Date.now()}`;
+    });
+}
+
+// Alternative WebSocket test method
+async function testIPWebSocket(ip, timeout = 3000) {
+    return new Promise((resolve) => {
+        const start = Date.now();
+        let completed = false;
+
+        try {
+            const ws = new WebSocket(`wss://${ip}/`);
+            
+            const timer = setTimeout(() => {
+                if (!completed) {
+                    completed = true;
+                    ws.close();
+                    resolve(null);
+                }
+            }, timeout);
+
+            ws.onopen = () => {
+                if (!completed) {
+                    completed = true;
+                    clearTimeout(timer);
+                    const ping = Date.now() - start;
+                    ws.close();
+                    resolve(ping);
+                }
+            };
+
+            ws.onerror = () => {
+                if (!completed) {
+                    completed = true;
+                    clearTimeout(timer);
+                    const ping = Date.now() - start;
+                    // Fast error can mean server responded quickly
+                    if (ping < 500) {
+                        resolve(ping);
+                    } else {
+                        resolve(null);
+                    }
+                }
+            };
+        } catch (error) {
+            resolve(null);
+        }
+    });
+}
+
+// Combined test using both methods
+async function testIPCombined(ip, maxPing) {
     const pings = [];
     
     for (let i = 0; i < 3; i++) {
-        try {
-            const start = Date.now();
-            
-            // Use fetch with timeout to simulate ping
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 5000);
-            
-            await fetch(`https://${ip}`, {
-                method: 'HEAD',
-                mode: 'no-cors',
-                signal: controller.signal,
-                headers: {
-                    'Host': sni
-                }
-            }).catch(() => {});
-            
-            clearTimeout(timeout);
-            const ping = Date.now() - start;
-            
-            if (ping < maxPing) {
-                pings.push(ping);
-            }
-        } catch (error) {
-            // Timeout or error
-            continue;
+        // Try image method first
+        let ping = await testIP(ip, 443, 3000);
+        
+        // If image fails, try WebSocket
+        if (ping === null) {
+            ping = await testIPWebSocket(ip, 3000);
+        }
+        
+        if (ping !== null && ping < maxPing) {
+            pings.push(ping);
         }
         
         // Small delay between tests
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 200));
     }
     
     return pings;
@@ -148,6 +223,8 @@ async function startScan() {
     successCount = 0;
     document.getElementById('resultsContainer').innerHTML = '<p class="empty-state">در حال اسکن...</p>';
     document.getElementById('successCount').textContent = '0';
+    document.getElementById('testedCount').textContent = '0';
+    document.getElementById('progressBar').style.width = '0%';
     
     // Get configuration
     const sni = document.getElementById('sni').value || 'speed.cloudflare.com';
@@ -169,8 +246,19 @@ async function startScan() {
             allIPs.push(...ips);
         } catch (error) {
             console.error(`Invalid range: ${range}`, error);
+            alert(`رنج نامعتبر: ${range}`);
+            stopScan();
+            return;
         }
     }
+    
+    if (allIPs.length === 0) {
+        alert('هیچ IP ای برای اسکن پیدا نشد!');
+        stopScan();
+        return;
+    }
+    
+    console.log(`Starting scan of ${allIPs.length} IPs...`);
     
     // Update UI
     document.getElementById('startBtn').disabled = true;
@@ -178,23 +266,30 @@ async function startScan() {
     document.getElementById('exportBtn').disabled = true;
     document.getElementById('status').textContent = 'در حال اسکن...';
     
-    // Scan IPs
-    const batchSize = 10;
+    // Scan IPs with concurrency control
+    const batchSize = 5; // Reduced for better stability
+    let tested = 0;
+    
     for (let i = 0; i < allIPs.length && scanning; i += batchSize) {
-        const batch = allIPs.slice(i, i + batchSize);
+        const batch = allIPs.slice(i, Math.min(i + batchSize, allIPs.length));
         
-        await Promise.all(batch.map(async (ip) => {
-            const pings = await testIP(ip, sni, maxPing);
+        const promises = batch.map(async (ip) => {
+            const pings = await testIPCombined(ip, maxPing);
+            
+            tested++;
+            updateStats(tested, allIPs.length);
             
             if (pings.length > 0 && scanning) {
                 addResult(ip, pings);
+                console.log(`Found working IP: ${ip} (${pings.join(', ')}ms)`);
             }
-            
-            updateStats(i + batch.indexOf(ip) + 1, allIPs.length);
-        }));
+        });
+        
+        await Promise.all(promises);
     }
     
     // Finish
+    console.log('Scan completed');
     stopScan();
 }
 
@@ -202,15 +297,20 @@ function stopScan() {
     scanning = false;
     document.getElementById('startBtn').disabled = false;
     document.getElementById('stopBtn').disabled = true;
-    document.getElementById('status').textContent = 'متوقف شد';
     
     if (results.length === 0) {
+        document.getElementById('status').textContent = 'تمام شد - هیچ IP ای پیدا نشد';
         document.getElementById('resultsContainer').innerHTML = '<p class="empty-state">هیچ IP مناسبی پیدا نشد</p>';
+    } else {
+        document.getElementById('status').textContent = `تمام شد - ${results.length} IP پیدا شد`;
     }
 }
 
 function exportResults() {
     if (results.length === 0) return;
+    
+    // Sort by average ping
+    results.sort((a, b) => parseFloat(a.avgPing) - parseFloat(b.avgPing));
     
     // Create CSV
     let csv = 'IP Address,Ping 1 (ms),Ping 2 (ms),Ping 3 (ms),Average Ping (ms)
@@ -218,7 +318,9 @@ function exportResults() {
     
     results.forEach(result => {
         const pingsStr = result.pings.join(',');
-        csv += `${result.ip},${pingsStr},${result.avgPing}
+        const missingPings = 3 - result.pings.length;
+        const emptyFields = ','.repeat(missingPings);
+        csv += `${result.ip},${pingsStr}${emptyFields},${result.avgPing}
 `;
     });
     
